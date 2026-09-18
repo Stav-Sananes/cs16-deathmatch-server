@@ -1,8 +1,14 @@
 # CS 1.6 Deathmatch Server Setup
 
-One PowerShell script that installs and configures a complete **Counter-Strike 1.6 deathmatch server** on Windows: HLDS, Metamod-P, AMX Mod X, CSDM, and working bots.
+One PowerShell script that installs and configures a complete **Counter-Strike 1.6 deathmatch server** on Windows: HLDS, Metamod, AMX Mod X, a deathmatch mod, and working bots. A second script upgrades it to the modern ReHLDS stack when the classic one won't load on current builds.
 
-Built while fighting through every one of the failure modes listed in [Troubleshooting](#troubleshooting) — the script exists so you don't have to.
+| Script | Purpose |
+|---|---|
+| `Setup-CsDeathmatch.ps1` | Full install: HLDS, Metamod-P, AMX Mod X, CSDM, YaPB |
+| `Setup-ReDeathmatch.ps1` | Swap CSDM for the maintained ReHLDS + ReDeathmatch stack |
+| `Diagnose-CsServer.ps1` | Read-only report of what's installed, wired and logged |
+
+Built while fighting through every one of the failure modes listed in [Troubleshooting](#troubleshooting) — the scripts exist so you don't have to.
 
 ```powershell
 cd C:\hlds
@@ -28,6 +34,48 @@ Run it from an **Administrator** PowerShell — see [Running the script](#runnin
 | 10 | Launch | Plus a reusable `start-server.bat` |
 
 The script is idempotent — every step checks whether its files are already in place, so re-running it is safe. Pass `-Force` to redo downloads and extractions.
+
+## Two stacks
+
+This repo has scripts for both, and which you need depends on your HLDS build.
+
+| | `Setup-CsDeathmatch.ps1` | `Setup-ReDeathmatch.ps1` |
+|---|---|---|
+| Deathmatch | CSDM 2.1.3d (2013) | ReDeathmatch (maintained) |
+| Engine | stock HLDS | ReHLDS |
+| Game logic | stock `mp.dll` | ReGameDLL_CS |
+| Metamod | Metamod-P | Metamod-r |
+| AMX Mod X | 1.10 | 1.10 + ReAPI |
+| Works on the 25th-anniversary build | often not | yes |
+
+**Start with `Setup-CsDeathmatch.ps1`** — it installs HLDS, AMX Mod X and YaPB, which both stacks need. If CSDM then refuses to load (see [Troubleshooting](#troubleshooting)), run `Setup-ReDeathmatch.ps1` on top; it removes CSDM and swaps in the modern components.
+
+On a current HLDS build you will probably end up on the second one. CSDM has been unmaintained since around 2014 and no longer matches either current HLDS builds or the AMX Mod X module interface.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Setup-ReDeathmatch.ps1 -RconPassword 'secret'
+```
+
+Defaults: free-for-all, 15 bots, weapon menu on spawn, no bomb, nothing left on the ground, locked to one map. Use `-TeamDeathmatch` for TDM, `-BotQuota N` for a different bot count.
+
+Its settings live in `addons\amxmodx\configs\redm\gamemode_deathmatch.json` — `equip.primary` and `equip.secondary` control the weapon menu, `botEquip` controls what bots get (only famas and galil by default), and the `cvars` block holds the gameplay rules.
+
+## Performance
+
+Bots have no network connection, so their scoreboard ping is a number YaPB makes up (`yb_ping_base_min` / `yb_ping_base_max`). More bots cost **CPU**, not bandwidth. The Half-Life engine is single-threaded, so when it can't keep up, real players feel it as lag.
+
+Diagnose before changing anything:
+
+- **Server console, top-left FPS counter.** 500–1000 is healthy with `sys_ticrate 1000`; drifting toward 100 means CPU-bound. `stats` shows per-frame CPU.
+- **`net_graph 3` on a client.** *Choke* means rate settings; *loss* means the network; neither, but jerky, means server frame time.
+
+| Symptom | Fix |
+|---|---|
+| Low server FPS | Lower `yb_quota`; High performance power plan; raise `hlds.exe` priority; close heavy apps |
+| Choke | Server: `sv_maxrate 100000`, `sv_maxupdaterate 101`. Client: `rate 100000`, `cl_updaterate 101`, `cl_cmdrate 101`, `ex_interp 0` |
+| Loss | Wired Ethernet, host especially. Distance between players can't be fixed locally |
+
+If only one player feels it and everyone else is fine, it's their connection or settings, not the server.
 
 ## Requirements
 
@@ -108,7 +156,8 @@ A game server is a program on your machine listening for traffic from strangers,
 | `-AmxxVersion` | `1.10.0-git5483` | AMX Mod X build |
 | `-ServerName` | `Stav's Deathmatch` | `hostname` |
 | `-RconPassword` | `CHANGE_ME` | **Change this.** Anyone with it controls the server |
-| `-Map` | `de_dust2` | Starting map |
+| `-Map` | `de_dust2` | The map. The server stays on it unless you pass `-Rotate` |
+| `-Rotate` | off | Enable normal map rotation instead of locking to `-Map` |
 | `-Port` | `27015` | UDP port |
 | `-MaxPlayers` | `16` | Slot count |
 | `-BotQuota` | `6` | YaPB bots (0 to disable) |
@@ -126,6 +175,28 @@ CSDM is hosted on the AlliedModders forums behind a login, so it can't be fetche
 ```
 
 Use 2.1.3d rather than the older 2.1.2. 2.1.3b restored CSDM after the February 2013 Steam update, and 2.1.3d fixed the client-command restrictions Valve added in 2014. Version 2.1.2 predates both and will crash the server.
+
+## Bots
+
+Valve's built-in CS bots are disabled on dedicated servers — `bot_add` and `bot_quota` do nothing on HLDS no matter how you configure them. They only work on a listen server ("New Game" from the menu). This script installs [YaPB](https://github.com/yapb/yapb) instead, which runs as a Metamod plugin and downloads its own navigation graphs, so there are no waypoint files to manage.
+
+**Bot settings live in `cstrike\addons\yapb\conf\yapb.cfg`, not `server.cfg`.** YaPB executes its own config on every map load and overwrites anything `server.cfg` set, which is a common reason bot counts appear to be ignored. The script writes these:
+
+| Cvar | Value | Meaning |
+|------|-------|---------|
+| `yb_quota` | `-BotQuota` (6) | How many bots |
+| `yb_quota_mode` | `fill` | Keep N players total, bots making up the difference |
+| `yb_difficulty` | `3` | 0–4 |
+| `yb_autovacate` | `1` | Kick a bot to make room for a joining human |
+| `yb_csdm_mode` | `1` | Tell the bots they're in a deathmatch game |
+
+To change the count live, in the server console: `yb_quota 10`. The `yb` command opens YaPB's own menu.
+
+## Maps
+
+By default the server is locked to a single map (`-Map`, default `de_dust2`). This is done with a one-line `mapcycle.txt` plus `mp_timelimit 0`, so a round ending never triggers a rotation. Pass `-Rotate` if you'd rather cycle maps; edit `cstrike\mapcycle.txt` to choose which.
+
+Note that CSDM needs spawn points for whatever map you run. It ships presets for the standard maps, so obscure maps may spawn players at the normal round-start positions.
 
 ## Connecting
 
@@ -154,6 +225,18 @@ amxx plugins    # the csdm_* plugins should be running
 
 In game: die, and you should respawn within a second with a weapon menu.
 
+## Diagnostics
+
+When something doesn't load, `Diagnose-CsServer.ps1` dumps the whole picture — which files exist, how the configs are wired, and the tail of both log files. It's read-only.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Diagnose-CsServer.ps1 > report.txt
+```
+
+The most useful part is `cstrike\addons\amxmodx\logs\error_*.log`. AMX Mod X records exactly which module or plugin failed and why, which beats guessing from what's missing. If that log doesn't exist at all, AMXX itself never loaded — start there instead.
+
+In the server console, `meta list` (Metamod's view), `amx_modules` (modules, including CSDM) and `amxx plugins` (plugins) answer the same question at three levels.
+
 ## Troubleshooting
 
 **`cannot be loaded. The file is not digitally signed`** — the execution policy blocking a downloaded script. See [Running the script](#running-the-script).
@@ -164,9 +247,17 @@ In game: die, and you should respawn within a second with a weapon menu.
 
 **`meta list` shows `0 plugins`** — Metamod isn't reading `plugins.ini`. Either it's missing, named `plugins.ini.txt`, or Metamod is resolving the path relative to the working directory instead of `cstrike\`. The script handles the last case by writing an absolute `plugins_file` into `config.ini` and mirroring the file where Metamod looks.
 
+**`Plugin uses an unknown function (name "csdm_respawn") - check your modules.ini`** — every `csdm_*.amxx` plugin fails with a variant of this when `csdm_amxx.dll` isn't loaded. AMX Mod X only loads non-standard modules listed in `addons\amxmodx\configs\modules.ini`, and the CSDM archive doesn't add itself. Append a line containing just `csdm`, restart, and confirm with `amx_modules` in the server console. Related symptom: `Run time error 10 ... native "csdm_settings_menu"` and `Called dynanative into a paused plugin`, both of which are downstream of the same cause.
+
+**`FindConfigFile: Can't find any config file!`** — ReDeathmatch can't read `configs\redm\gamemode_deathmatch.json`. Either it's missing, or an edit broke its JSON. Note that the shipped file is JSONC: it contains `//` and `/* */` comments, so `ConvertFrom-Json` in PowerShell 5.1 chokes on it, and a script that rewrites it through JSON parsing will fail. Edit values in place instead, and write UTF-8 **without** a BOM.
+
+**`GameConfig CRC mismatch for game "*" section "*" library "server"`** — AMX Mod X's gamedata doesn't match your HLDS build, i.e. the 25th-anniversary build again. Anything depending on memory offsets may misbehave even if it loads. Use `-LegacyBuild`, or move to the ReDeathmatch stack.
+
 **Server crashes when a player picks a team** — almost always CSDM. Confirm by commenting out every line in `configs/plugins-csdm.ini` with `;`; if the crash stops, CSDM is the cause. Fix by upgrading to 2.1.3d and AMX Mod X 1.10. If it still crashes, run with `-LegacyBuild`: the 25th-anniversary HLDS build broke most 1.6 plugins, and the `steam_legacy` branch is what they were compiled against.
 
-**No bots, and `bot_add` / `bot_quota` do nothing** — this is expected. Valve's built-in CS bots are disabled on dedicated servers; they only work on a listen server ("New Game"). You need a server-side bot, which is why this script installs YaPB. Control it with `yb_quota`, `yb_difficulty` and the `yb` menu. YaPB fetches its own waypoints, so no manual nav files.
+**No bots, and `bot_add` / `bot_quota` do nothing** — expected; see [Bots](#bots). Those are Valve's cvars and they're dead on a dedicated server.
+
+**No bots even with YaPB installed** — two usual causes. Either the install failed quietly (check for `cstrike\addons\yapb\bin\yapb.dll` and for a `yapb.dll` line in `addons\metamod\plugins.ini`, and confirm YaPB shows as `RUN` in `meta list`), or `yb_quota` is being set in `server.cfg`, where YaPB's own `yapb.cfg` overwrites it on every map load. Put bot settings in `addons\yapb\conf\yapb.cfg`.
 
 **Files extracted to the wrong place** — a recurring theme. AMX Mod X archives contain an `addons\` folder and extract into `cstrike\`; the CSDM archive contains bare `modules\`, `plugins\` and `configs\` folders and extracts into `cstrike\addons\amxmodx\`. Getting this backwards leaves you with `cstrike\addons\modules\`, which nothing loads. The script detects the layout and copies accordingly.
 
@@ -180,9 +271,12 @@ hlds.exe
        └─ metamod
             └─ plugins.ini  -> amxmodx_mm.dll, yapb.dll
                  └─ AMX Mod X
+                      ├─ configs/modules.ini      -> csdm  (module - easy to miss)
                       └─ configs/plugins-csdm.ini -> csdm_*.amxx
                            └─ configs/csdm.cfg
 ```
+
+Both AMXX lines are required. The plugins load without the module and then fail one by one, which looks like a plugin problem but isn't.
 
 ## Credits
 
