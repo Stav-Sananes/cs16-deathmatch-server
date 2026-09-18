@@ -1,0 +1,20 @@
+# Server runtime / downloaded content - never commit these
+hlds/
+cstrike/
+steamcmd/
+*.zip
+*.bz2
+*.dll
+*.amxx
+*.bak
+logs/
+start-server.bat
+
+# Local overrides
+server.local.cfg
+settings.local.ps1
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
