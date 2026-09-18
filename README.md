@@ -2,11 +2,17 @@
 
 One PowerShell script that installs and configures a complete **Counter-Strike 1.6 deathmatch server** on Windows: HLDS, Metamod, AMX Mod X, a deathmatch mod, and working bots. A second script upgrades it to the modern ReHLDS stack when the classic one won't load on current builds.
 
+**Easiest way in: double-click `Start-Here.cmd`.** It asks for administrator rights, unblocks the scripts, bypasses the execution policy, and gives you a menu — full install, mode selection, start server, diagnose. No commands to type.
+
 | Script | Purpose |
 |---|---|
+| `Start-Here.cmd` | Menu launcher — handles admin rights, unblocking and execution policy |
 | `Setup-CsDeathmatch.ps1` | Full install: HLDS, Metamod-P, AMX Mod X, CSDM, YaPB |
 | `Setup-ReDeathmatch.ps1` | Swap CSDM for the maintained ReHLDS + ReDeathmatch stack |
+| `Setup-Normal.cmd` / `Setup-Headshot.cmd` | One-click mode presets |
 | `Diagnose-CsServer.ps1` | Read-only report of what's installed, wired and logged |
+
+Everything below is the manual equivalent, for when you want control over the parameters.
 
 Built while fighting through every one of the failure modes listed in [Troubleshooting](#troubleshooting) — the scripts exist so you don't have to.
 
@@ -76,6 +82,74 @@ Diagnose before changing anything:
 | Loss | Wired Ethernet, host especially. Distance between players can't be fixed locally |
 
 If only one player feels it and everyone else is fine, it's their connection or settings, not the server.
+
+## Running it day to day
+
+Once set up, **use `C:\hlds\start-server.bat`** — double-click it, or make a desktop shortcut. Closing the console window stops the server.
+
+The setup scripts are not launchers. They write settings into config files on disk (`gamemode_deathmatch.json`, `yapb.cfg`, `plugins.ini`, `server.cfg`), and `hlds.exe` reads those on every start. Running a setup script to start the server would re-download every component and reset your tweaks.
+
+| You want to... | Run |
+|---|---|
+| Play | `start-server.bat` |
+| Change how the server is built or configured | the relevant setup script |
+| Change one setting temporarily | type the cvar in the server console |
+| Change one setting permanently | edit the config file, then restart |
+
+Both setup scripts write `start-server.bat` with the IP, map, port and slot count they configured, so re-run one after changing any of those.
+
+Common live tweaks, typed into the server console:
+
+```
+yb_quota 10          # bot count (fill mode: total players, not bots + humans)
+yb_difficulty 2      # 0-4
+changelevel de_nuke  # switch map
+status               # who's connected
+```
+
+To make a live change permanent, put it in the file that owns it: bot settings in `addons\yapb\conf\yapb.cfg`, deathmatch rules in `addons\amxmodx\configs\redm\gamemode_deathmatch.json`, and server basics in `cstrike\server.cfg`.
+
+## Game modes
+
+Two ready-made presets — double-click either, no switches to remember:
+
+| File | Mode |
+|---|---|
+| `Setup-Normal.cmd` | FFA, all weapons, normal damage, 10 bots |
+| `Setup-Headshot.cmd` | FFA, all weapons, **headshots only**, 10 bots |
+
+Edit `CHANGE_ME` in both to your RCON password before first use. They call `Setup-ReDeathmatch.ps1` with the right switches, so the whole stack is reconfigured and the server restarts in that mode.
+
+Or call the script directly:
+
+```powershell
+# Headshot-only FFA, 10 bots
+powershell -ExecutionPolicy Bypass -File .\Setup-ReDeathmatch.ps1 -HeadshotOnly -BotQuota 10
+```
+
+| Switch | Effect |
+|---|---|
+| *(default)* | FFA, all weapons, body damage normal |
+| `-HeadshotOnly` | `mp_damage_headshot_only 1` — only headshots deal damage |
+| `-TeamDeathmatch` | TDM instead of free-for-all |
+| `-FakeBotPing` | Give bots invented pings (see below) |
+
+**To switch modes mid-session**, don't re-run anything — type it in the server console:
+
+```
+mp_damage_headshot_only 1     # headshot only
+mp_damage_headshot_only 0     # back to normal
+```
+
+The presets are for making a mode the persistent default; the cvar is for flipping between them while people are playing. ReDeathmatch also ships round modes (`PISTOLS_ONLY_HS`, `ALL_WEAPONS_HS_ONLY`) in the `modes` array of `gamemode_deathmatch.json`; set `redm_modes_switch` to `sequentially` or `random` to rotate through them automatically.
+
+## Bot ping
+
+Bots have no network connection, so any ping shown next to them is invented by YaPB. **It's off by default here**, because `yb_latency_display 2` is known to skew *real* players' displayed pings too — a wired player can show a ping that doesn't match the `ping` command ([yapb#227](https://github.com/yapb/yapb/issues/227), [yapb#572](https://github.com/yapb/yapb/issues/572)). With `yb_latency_display 0`, everyone's ping reads correctly and bots simply show as bots.
+
+Pass `-FakeBotPing` if you'd rather have the scoreboard look populated, accepting the display quirk. Tune it with `yb_ping_base_min` and `yb_ping_base_max`.
+
+If the *game itself* feels laggy rather than the number looking wrong, that's a different problem — see [Performance](#performance).
 
 ## Requirements
 
