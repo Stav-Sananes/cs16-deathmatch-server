@@ -24,7 +24,7 @@ param(
     [string] $RconPassword = 'CHANGE_ME',
     [string] $Map          = 'de_dust2',
     [int]    $Port         = 27015,
-    [int]    $MaxPlayers   = 20,
+    [int]    $MaxPlayers   = 11,
     [int]    $BotQuota     = 15,
     [switch] $TeamDeathmatch,   # default is FFA (free-for-all); this switches to TDM
     [switch] $Rotate,
