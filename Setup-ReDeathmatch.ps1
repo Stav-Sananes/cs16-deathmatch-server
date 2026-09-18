@@ -24,9 +24,11 @@ param(
     [string] $RconPassword = 'CHANGE_ME',
     [string] $Map          = 'de_dust2',
     [int]    $Port         = 27015,
-    [int]    $MaxPlayers   = 11,
+    [int]    $MaxPlayers   = 20,
     [int]    $BotQuota     = 15,
     [switch] $TeamDeathmatch,   # default is FFA (free-for-all); this switches to TDM
+    [switch] $HeadshotOnly,     # only headshots deal damage
+    [switch] $FakeBotPing,      # show invented pings for bots (known to skew real players' pings)
     [switch] $Rotate,
     [switch] $NoStart
 )
@@ -208,6 +210,7 @@ if ($src) {
             'mp_item_staytime'           = '0'    # any dropped item vanishes at once
             'mp_weapons_allow_map_placed'= '0'    # no map-placed guns
             'mp_give_player_c4'          = '0'    # no bomb
+            'mp_damage_headshot_only'    = if ($HeadshotOnly) { '1' } else { '0' }
             # --- deathmatch hygiene ---
             'mp_freezetime'              = '0'
             'mp_buytime'                 = '0'
@@ -283,11 +286,19 @@ if ($yapbOk) {
     $yapbCfg = Join-Path $Addons 'yapb\conf\yapb.cfg'
     New-Item -ItemType Directory -Force -Path (Split-Path $yapbCfg) | Out-Null
     $body = if (Test-Path $yapbCfg) { Get-Content $yapbCfg } else { @() }
-    $body = $body | Where-Object { $_ -notmatch '^\s*yb_(quota|quota_mode|difficulty|autovacate|csdm_mode)\b' }
+    $body = $body | Where-Object { $_ -notmatch '^\s*yb_(quota|quota_mode|difficulty|autovacate|csdm_mode|latency_display|ping_base_min|ping_base_max)\b' }
     $body += @('', '// added by Setup-ReDeathmatch.ps1',
                "yb_quota `"$BotQuota`"", 'yb_quota_mode "fill"',
                'yb_difficulty "3"', 'yb_autovacate "1"',
                "yb_csdm_mode `"$(if ($TeamDeathmatch) {'1'} else {'2'})`"")
+
+    if ($FakeBotPing) {
+        $body += @('yb_latency_display "2"', 'yb_ping_base_min "10"', 'yb_ping_base_max "40"')
+    } else {
+        # 2 invents bot pings but also skews REAL players' displayed pings
+        # (yapb issues #227, #572). 0 leaves everyone's ping accurate.
+        $body += 'yb_latency_display "0"'
+    }
     Set-Content $yapbCfg -Value $body -Encoding Ascii
     Ok "yapb.cfg (quota $BotQuota)"
 }
@@ -350,6 +361,8 @@ if ($script:Problems.Count) {
 
 Write-Host "`n    Mode           : $(if ($TeamDeathmatch) {'Team Deathmatch'} else {'FFA (free-for-all)'})"
 Write-Host "    Bots           : $BotQuota (yb_quota, fill mode)"
+Write-Host "    Headshot only  : $(if ($HeadshotOnly) {'yes'} else {'no'})"
+Write-Host "    Bot fake ping  : $(if ($FakeBotPing) {'on'} else {'off (real pings stay accurate)'})"
 Write-Host "    Bomb / dropped guns: disabled"
 if ($BotQuota -ge $MaxPlayers) {
     Warn "maxplayers ($MaxPlayers) is not above the bot quota ($BotQuota) - there will be no room for humans."
@@ -363,10 +376,22 @@ Write-Host "      amxx plugins   -> ReDeathmatch.amxx and redm_spawns.amxx, runn
 Write-Host "    Look for: FindConfigFile: Config ``gamemode_deathmatch.json`` loaded"
 Write-Host "    Then check: addons\amxmodx\logs\error_*.log"
 
-if (-not $NoStart -and -not $script:Problems.Count) {
+if (-not $script:Problems.Count) {
     $ip = (Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' } |
            Select-Object -First 1 -ExpandProperty IPv4Address | Select-Object -First 1).IPAddress
-    Start-Process -FilePath (Join-Path $Root 'hlds.exe') -WorkingDirectory $Root `
-        -ArgumentList @('-console','-game','cstrike','+ip',$ip,'+map',$Map,'+maxplayers',$MaxPlayers,'-port',$Port)
-    Ok 'server started'
+
+    # Day-to-day launcher. The settings this script wrote live in the config
+    # files on disk, so starting hlds.exe is all that's needed from here on.
+    Set-Content (Join-Path $Root 'start-server.bat') -Encoding Ascii -Value @"
+@echo off
+cd /d "$Root"
+hlds.exe -console -game cstrike +ip $ip +map $Map +maxplayers $MaxPlayers -port $Port
+"@
+    Ok "wrote $Root\start-server.bat - use this to start the server from now on"
+
+    if (-not $NoStart) {
+        Start-Process -FilePath (Join-Path $Root 'hlds.exe') -WorkingDirectory $Root `
+            -ArgumentList @('-console','-game','cstrike','+ip',$ip,'+map',$Map,'+maxplayers',$MaxPlayers,'-port',$Port)
+        Ok 'server started'
+    }
 }
